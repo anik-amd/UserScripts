@@ -216,6 +216,14 @@
         forward ? to.startContainer : from.startContainer,
         forward ? to.startOffset : from.startOffset
       );
+
+      // Empty area below the text has no caret offset to drag from, so the rebuilt range
+      // collapses. Selecting the message is a better outcome than selecting nothing.
+      if (range.collapsed) {
+        selectContents(start.scope);
+        return;
+      }
+
       selection.removeAllRanges();
       selection.addRange(range);
     }, 0);
