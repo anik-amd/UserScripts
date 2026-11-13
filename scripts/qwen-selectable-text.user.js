@@ -203,8 +203,14 @@
 
       const from = caretAt(start.x, start.y);
       const to = caretAt(event.clientX, event.clientY);
-      if (!from || !to) return;
-      if (!start.scope.contains(from.startContainer) || !start.scope.contains(to.startContainer)) return;
+      const usable = (range) => !!range && start.scope.contains(range.startContainer);
+
+      // Hit-testing can fail when an overlay sits above the text; the caret lookup then
+      // resolves outside the message. Selecting the message beats selecting nothing.
+      if (!usable(from) || !usable(to)) {
+        selectContents(start.scope);
+        return;
+      }
 
       const forward = from.compareBoundaryPoints(Range.START_TO_START, to) <= 0;
       const range = document.createRange();
