@@ -4,6 +4,12 @@
 // @version      2.0.0
 // @description  Press Enter to send in Qwen Chat when the site would otherwise insert a newline. Shift+Enter keeps the newline.
 // @author       anik-amd
+// @namespace    https://github.com/anik-amd/UserScripts
+// @homepageURL  https://github.com/anik-amd/UserScripts
+// @supportURL   https://github.com/anik-amd/UserScripts/issues
+// @updateURL    https://raw.githubusercontent.com/anik-amd/UserScripts/main/scripts/qwen-enter-to-send.user.js
+// @downloadURL  https://raw.githubusercontent.com/anik-amd/UserScripts/main/scripts/qwen-enter-to-send.user.js
+// @license      MIT
 // @match        https://chat.qwen.ai/*
 // @match        https://chat.qwenlm.ai/*
 // @run-at       document-start
