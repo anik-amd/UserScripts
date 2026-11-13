@@ -60,15 +60,26 @@ async function dragSelect() {
   await page.mouse.move(box.x + 2, box.y + box.height / 2);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2, { steps: 10 });
+  const mid = await page.evaluate(() => getSelection().toString());
   await page.mouse.up();
-  return page.evaluate(() => getSelection().toString());
+  await page.waitForTimeout(120);
+  const after = await page.evaluate(() => getSelection().toString());
+  return { mid, after };
 }
 
 say('css unlocked', await page.evaluate(() => {
   const node = document.querySelector('#probe-msg .qwen-markdown-text-node');
   return { userSelect: getComputedStyle(node).userSelect, inline: node.style.getPropertyValue('user-select') };
 }));
+
+await page.evaluate(() => {
+  window.__selTrace = [];
+  document.addEventListener('selectionchange', () => {
+    window.__selTrace.push(getSelection().toString().slice(0, 40));
+  }, true);
+});
 say('drag select', await dragSelect());
+say('selectionchange trace', await page.evaluate(() => window.__selTrace || null));
 
 // ---- hostile: site blocks pointerdown/mousedown at window level ----
 await page.evaluate(() => {
