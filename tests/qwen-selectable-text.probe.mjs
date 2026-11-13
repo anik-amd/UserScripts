@@ -89,6 +89,48 @@ for (const id of ['t-plain', 't-class', 't-inline', 't-msg']) {
 
 say('selectstart events', await page.evaluate(() => window.__selEvents));
 
+say('child computed', await page.evaluate(() => {
+  const node = document.querySelector('#t-msg .qwen-markdown-text-node');
+  const cs = getComputedStyle(node);
+  const rect = node.getBoundingClientRect();
+  const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+  return {
+    pointerEvents: cs.pointerEvents,
+    userSelect: cs.userSelect,
+    webkitUserDrag: cs.webkitUserDrag,
+    display: cs.display,
+    contentVisibility: cs.contentVisibility,
+    touchAction: cs.touchAction,
+    hit: hit ? `${hit.tagName}.${String(hit.className).slice(0, 50)}` : null
+  };
+}));
+
+say('site rules touching qwen-markdown', await page.evaluate(() => {
+  const out = [];
+  const walk = (list, media) => {
+    for (const rule of list) {
+      if (rule.cssRules && rule.conditionText !== undefined) {
+        walk(rule.cssRules, rule.conditionText);
+        continue;
+      }
+      if (!rule.selectorText || !/qwen-markdown/.test(rule.selectorText)) continue;
+      const css = rule.style.cssText;
+      if (!/pointer-events|user-select|content-visibility|touch-action|overflow|position|z-index|display/.test(css)) continue;
+      out.push({ selector: rule.selectorText.slice(0, 140), media, css: css.slice(0, 220) });
+    }
+  };
+  for (const sheet of document.styleSheets) {
+    let rules;
+    try {
+      rules = sheet.cssRules;
+    } catch {
+      continue;
+    }
+    walk(rules, '');
+  }
+  return out.slice(0, 40);
+}));
+
 // does the site cancel a programmatically dispatched selectstart?
 say('dispatch selectstart', await page.evaluate(() => {
   const node = document.querySelector('#t-msg .qwen-markdown-text-node');
