@@ -113,12 +113,39 @@ await page.screenshot({ path: `${OUT}/selectable-400.png` });
 const ta = page.locator('textarea').first();
 await ta.click({ force: true });
 await ta.type('probe selectable', { delay: 10 });
+
+say('composer state before Enter', await page.evaluate(() => {
+  const btn = document.querySelector('.message-input-right-button-send button.send-button');
+  const region = document.querySelector('.message-input-right-button-send');
+  return {
+    sendButton: btn ? btn.outerHTML.slice(0, 200) : null,
+    region: region ? region.outerHTML.slice(0, 300) : null,
+    active: document.activeElement?.tagName,
+    phone: getComputedStyle(region || document.body).pointerEvents
+  };
+}));
+
+await page.evaluate(() => {
+  window.__clicks = [];
+  const native = HTMLElement.prototype.click;
+  HTMLElement.prototype.click = function () {
+    window.__clicks.push(`${this.tagName}.${typeof this.className === 'string' ? this.className : ''}`);
+    return native.apply(this, arguments);
+  };
+  window.__keys = [];
+  window.addEventListener('keydown', (e) => window.__keys.push(e.key), true);
+});
+
 await page.keyboard.press('Enter');
 await page.waitForTimeout(4000);
 say('send after fix', await page.evaluate(() => ({
   value: document.querySelector('textarea')?.value,
-  loginWall: /Welcome to Qwen/i.test(document.body.innerText || '')
+  loginWall: /Welcome to Qwen/i.test(document.body.innerText || ''),
+  clicks: window.__clicks || [],
+  keys: window.__keys || [],
+  selection: getSelection().toString().slice(0, 40)
 })));
+await page.screenshot({ path: `${OUT}/selectable-after-enter.png` });
 
 say('console errors', errors.slice(0, 10));
 await browser.close();
