@@ -23,7 +23,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Probe chat.qwen.ai
-        run: node tests/probe.mjs
+        run: node tests/qwen-enter-to-send.probe.mjs
         continue-on-error: true
 
       - uses: actions/upload-artifact@v4
