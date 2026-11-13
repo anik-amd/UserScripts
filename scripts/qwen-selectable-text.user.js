@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Qwen Chat - Selectable Text
 // @namespace    https://github.com/anik-amd/UserScripts
-// @version      1.5.1
+// @version      1.6.0
 // @description  Restores text selection and copying of chat messages (AI replies and your own) in Qwen Chat, including in narrow windows where the site switches to its mobile layout.
 // @author       anik-amd
 // @homepageURL  https://github.com/anik-amd/UserScripts
@@ -54,6 +54,18 @@
       '  -webkit-user-select: text !important;',
       '  user-select: text !important;',
       '  -webkit-touch-callout: default !important;',
+      '}',
+      // The mobile layout wraps messages in its own selection widget: it paints its own
+      // highlight, drag handles and a Copy/Translate menu over the native selection.
+      // Hide that chrome so the browser's selection and clipboard are what you see and use.
+      '.md-text-select__highlight-layer,',
+      '.md-text-select__handle-layer,',
+      '.md-text-select__menu {',
+      '  display: none !important;',
+      '}',
+      '.md-text-select--active {',
+      '  outline: none !important;',
+      '  background: transparent !important;',
       '}'
     ].join('\n');
     (document.head || document.documentElement).appendChild(style);
