@@ -78,6 +78,38 @@ async function drag(id) {
   return page.evaluate(() => getSelection().toString().trim());
 }
 
+// ---- debug: does the fallback run, and what does caretRangeFromPoint return? ----
+await page.evaluate(() => {
+  window.__trace = { pointerdown: [], mouseup: [], addRange: [], caret: [] };
+  window.addEventListener('pointerdown', (e) => {
+    window.__trace.pointerdown.push({ target: String(e.target.className || e.target.id || e.target.tagName).slice(0, 40), x: e.clientX, y: e.clientY });
+  }, true);
+  window.addEventListener('mouseup', (e) => {
+    window.__trace.mouseup.push({ x: e.clientX, y: e.clientY });
+  }, true);
+  const add = Selection.prototype.addRange;
+  Selection.prototype.addRange = function (range) {
+    window.__trace.addRange.push({ text: String(range).slice(0, 60), collapsed: range.collapsed });
+    return add.apply(this, arguments);
+  };
+});
+
+await page.evaluate(() => {
+  const box = document.querySelector('#t-class').getBoundingClientRect();
+  const y = box.top + box.height / 2;
+  const sample = (x) => {
+    if (!document.caretRangeFromPoint) return { error: 'caretRangeFromPoint missing' };
+    const range = document.caretRangeFromPoint(x, y);
+    if (!range) return { error: 'null range' };
+    return {
+      container: String(range.startContainer.nodeName) + '.' + String(range.startContainer.parentElement?.className || '').slice(0, 30),
+      offset: range.startOffset,
+      insideScope: document.querySelector('#t-class').contains(range.startContainer)
+    };
+  };
+  window.__trace.caret.push({ start: sample(box.left + 2), end: sample(box.right - 2) });
+});
+
 // ---- 1. drag selection on every markup variant ----
 for (const id of Object.keys(MESSAGES)) {
   await page.evaluate(() => getSelection().removeAllRanges());
@@ -89,6 +121,8 @@ for (const id of Object.keys(MESSAGES)) {
   }, id) });
   check(`drag selects text in ${id}`, selected.includes(MESSAGES[id]), selected);
 }
+
+say('drag trace', await page.evaluate(() => window.__trace));
 
 // ---- 2. site-level drag sabotage must not matter ----
 await page.evaluate(() => {
