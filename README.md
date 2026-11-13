@@ -43,18 +43,28 @@ link) and keep the row and the header in sync.
 ## Verification
 
 `tests/` holds Playwright probes that load the live site in GitHub Actions and check behaviour.
-Run one with `gh workflow run probe.yml --ref main -f probe=dom|copy|selectable` (needs Actions
-enabled; no local dependencies). Last verified 2026-11-13 against `chat.qwen.ai`:
+Run one with `gh workflow run probe.yml --ref dev -f probe=dom|copy|selectable|clipboard`
+(needs Actions enabled; no local dependencies). The `selectable` probe prints `PASS`/`FAIL` per
+check and a `summary` line. Last verified against `chat.qwen.ai`:
 
 - guest composer: Enter and clicking the send button both trigger a send attempt, `Shift+Enter`
   inserts a newline
 - with Enter-to-Send loaded, Enter clicks exactly one element — `button.send-button` — and
   produces the same send attempt, while `Shift+Enter` still inserts a newline
-- narrow (400px) layout: drag selection, triple-click and `Ctrl+A` all work on plain text
-- with Selectable Text loaded, hostile `user-select: none !important` rules injected *after* the
-  script are overridden (inline `!important`), a site style reset is repaired, the site's
-  `mousedown` handler no longer sees the event that starts a selection, buttons still get their
-  own events, and Enter-to-Send keeps working
+- with Selectable Text loaded:
+  - drag selection works on plain text, on `.qwen-markdown` markup, and with inline
+    `user-select: text !important` applied
+  - a site `mousedown`/`pointerdown`/`selectstart` handler calling `preventDefault()` no longer
+    cancels the drag, because `preventDefault` is neutralised for those events while a drag
+    starts over a message
+  - dragging over empty space inside a message, or through a transparent overlay, still selects
+    the message instead of nothing (self-built `Range` from `caretRangeFromPoint`, whole-message
+    fallback when hit-testing cannot reach the text)
+  - double-click selects the message, `Alt+C` copies the message under the pointer
+  - `Ctrl+C` copies the selected text even when the site's `copy` and `keydown` handlers try to
+    replace the clipboard
+  - Enter-to-Send keeps working alongside it
+
 
 ## License
 
