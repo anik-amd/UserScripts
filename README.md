@@ -7,9 +7,9 @@ link points at the raw `.user.js` file, so the manager opens its confirmation pa
 
 <!-- Icons: 1 Tampermonkey · 2 Violentmonkey · 3 ScriptCat · 4 Userscripts (Safari) -->
 
-| Script | Site(s) | What it does | Install |
+| | Site(s) | What it does | Install |
 | --- | --- | --- | --- |
-| [`qwen-enter-to-send.user.js`](scripts/qwen-enter-to-send.user.js) | `chat.qwen.ai`, `chat.qwenlm.ai` | Sends the message when you press **Enter**, for sessions where the site inserts a newline instead. `Shift+Enter` / `Alt+Enter` still insert a newline. Skipped during IME composition, while a mention/menu popup is open, and on empty input. | <a href="https://raw.githubusercontent.com/anik-amd/UserScripts/main/scripts/qwen-enter-to-send.user.js" title="Install with Tampermonkey"><img src="https://www.tampermonkey.net/favicon.ico" width="18" height="18" alt="Tampermonkey"></a> <a href="https://raw.githubusercontent.com/anik-amd/UserScripts/main/scripts/qwen-enter-to-send.user.js" title="Install with Violentmonkey"><img src="https://cdn.jsdelivr.net/gh/violentmonkey/violentmonkey@master/src/resources/icon.svg" width="18" height="18" alt="Violentmonkey"></a> <a href="https://raw.githubusercontent.com/anik-amd/UserScripts/main/scripts/qwen-enter-to-send.user.js" title="Install with ScriptCat"><img src="https://scriptcat.org/favicon.ico" width="18" height="18" alt="ScriptCat"></a> <a href="https://raw.githubusercontent.com/anik-amd/UserScripts/main/scripts/qwen-enter-to-send.user.js" title="Install with Userscripts (Safari)"><img src="https://cdn.jsdelivr.net/gh/quoid/userscripts@main/src/dev/assets/logo.png" width="18" height="18" alt="Userscripts for Safari"></a> |
+| [Qwen Chat - Enter to Send](https://github.com/anik-amd/UserScripts/blob/main/scripts/qwen-enter-to-send.user.js) | `chat.qwen.ai`, `chat.qwenlm.ai` | Sends the message when you press **Enter**, for sessions where the site inserts a newline instead. `Shift+Enter` / `Alt+Enter` still insert a newline. Skipped during IME composition, while a mention/menu popup is open, and on empty input. | <a href="https://raw.githubusercontent.com/anik-amd/UserScripts/main/scripts/qwen-enter-to-send.user.js" title="Install with Tampermonkey"><img src="https://www.tampermonkey.net/favicon.ico" width="18" height="18" alt="Tampermonkey"></a> <a href="https://raw.githubusercontent.com/anik-amd/UserScripts/main/scripts/qwen-enter-to-send.user.js" title="Install with Violentmonkey"><img src="https://cdn.jsdelivr.net/gh/violentmonkey/violentmonkey@master/src/resources/icon.svg" width="18" height="18" alt="Violentmonkey"></a> <a href="https://raw.githubusercontent.com/anik-amd/UserScripts/main/scripts/qwen-enter-to-send.user.js" title="Install with ScriptCat"><img src="https://scriptcat.org/favicon.ico" width="18" height="18" alt="ScriptCat"></a> <a href="https://raw.githubusercontent.com/anik-amd/UserScripts/main/scripts/qwen-enter-to-send.user.js" title="Install with Userscripts (Safari)"><img src="https://cdn.jsdelivr.net/gh/quoid/userscripts@main/src/dev/assets/logo.png" width="18" height="18" alt="Userscripts for Safari"></a> |
 
 Install icons: **Tampermonkey** · **Violentmonkey** · **ScriptCat** · **Userscripts** (Safari).
 All four accept the same raw URL; the manager that owns `.user.js` handles the click.
@@ -39,8 +39,8 @@ tests/                   # optional Playwright probes
 ```
 
 Every script carries a `@match`/`@include` header listing the site(s) it runs on. When adding a
-script, add a row to the table above (script, site(s), behaviour, install icons) and keep the row
-and the header in sync.
+script, add a row to the table above (readable name linked to the file, site(s), behaviour, install
+icons) and keep the row and the header in sync.
 
 ## Verification
 
