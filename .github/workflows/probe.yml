@@ -12,6 +12,7 @@ on:
           - dom
           - copy
           - selectable
+          - clipboard
 
 jobs:
   probe:
@@ -37,6 +38,7 @@ jobs:
           case "${{ inputs.probe }}" in
             copy) node tests/qwen-copy.probe.mjs || true ;;
             selectable) node tests/qwen-selectable-text.probe.mjs || true ;;
+            clipboard) node tests/qwen-copy-event.probe.mjs || true ;;
             *) node tests/qwen-enter-to-send.probe.mjs || true ;;
           esac
         continue-on-error: true

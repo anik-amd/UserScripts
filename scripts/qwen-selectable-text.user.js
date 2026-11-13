@@ -140,4 +140,37 @@
     },
     true
   );
+
+  // 5. Copy. Qwen rewrites the clipboard on copy (attribution / formatted markdown) in some
+  //    builds, and at narrow widths that path can end up copying nothing. When the selection
+  //    sits inside a message, let the browser perform the copy natively instead.
+  function selectionInContent() {
+    const selection = getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
+    const elementOf = (node) => (node && node.nodeType === 1 ? node : node && node.parentElement);
+    const anchor = elementOf(selection.anchorNode);
+    const focus = elementOf(selection.focusNode);
+    return !!anchor && !!focus && inContent(anchor) && inContent(focus);
+  }
+
+  window.addEventListener(
+    'copy',
+    (event) => {
+      if (selectionInContent()) event.stopImmediatePropagation();
+    },
+    true
+  );
+
+  // Site shortcuts that intercept Ctrl/Cmd+C and write their own clipboard text.
+  window.addEventListener(
+    'keydown',
+    (event) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      const key = (event.key || '').toLowerCase();
+      if (key !== 'c') return;
+      if (!selectionInContent()) return;
+      event.stopImmediatePropagation();
+    },
+    true
+  );
 })();
