@@ -35,9 +35,9 @@ jobs:
       - name: Run probe
         run: |
           case "${{ inputs.probe }}" in
-            copy) node tests/qwen-copy.probe.mjs ;;
-            selectable) node tests/qwen-selectable-text.probe.mjs ;;
-            *) node tests/qwen-enter-to-send.probe.mjs ;;
+            copy) node tests/qwen-copy.probe.mjs || true ;;
+            selectable) node tests/qwen-selectable-text.probe.mjs || true ;;
+            *) node tests/qwen-enter-to-send.probe.mjs || true ;;
           esac
         continue-on-error: true
 

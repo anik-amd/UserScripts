@@ -10,6 +10,13 @@ const say = (k, v) => report.push(`## ${k}\n${typeof v === 'string' ? v : JSON.s
 const SELECT_SCRIPT = await fs.readFile('scripts/qwen-selectable-text.user.js', 'utf8');
 const SEND_SCRIPT = await fs.readFile('scripts/qwen-enter-to-send.user.js', 'utf8');
 
+const flush = () => fs.writeFile(`${OUT}/report.md`, report.join('\n'), 'utf8');
+process.on('unhandledRejection', async (e) => {
+  say('FAILED', String((e && e.message) || e));
+  await flush();
+  process.exit(1);
+});
+
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 400, height: 860 }, locale: 'en-US' });
 const page = await ctx.newPage();
@@ -21,6 +28,18 @@ await page.addInitScript(SELECT_SCRIPT);
 await page.addInitScript(SEND_SCRIPT);
 await page.goto('https://chat.qwen.ai', { waitUntil: 'domcontentloaded', timeout: 60000 });
 await page.waitForTimeout(8000);
+
+// The cookie banner is a full-width section that intercepts pointer events.
+async function dismissCookies() {
+  const accept = page.getByRole('button', { name: /accept all cookies/i });
+  if (await accept.count()) {
+    await accept.first().click({ timeout: 5000 }).catch(() => {});
+  }
+  await page.evaluate(() => {
+    document.querySelector('[class*="cookie-confirm"]')?.remove();
+  });
+}
+await dismissCookies();
 
 // Hostile rules added AFTER the userscript, like the logged-in bundle does.
 say('hostile css installed', await page.evaluate(() => {
@@ -92,7 +111,7 @@ await page.screenshot({ path: `${OUT}/selectable-400.png` });
 
 // Regression: Enter-to-send still works (guest composer -> login wall = send attempt).
 const ta = page.locator('textarea').first();
-await ta.click();
+await ta.click({ force: true });
 await ta.type('probe selectable', { delay: 10 });
 await page.keyboard.press('Enter');
 await page.waitForTimeout(4000);
