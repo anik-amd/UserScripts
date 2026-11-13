@@ -1,4 +1,4 @@
-// Throwaway probe: why text selection fails in a narrow Qwen window.
+// Throwaway probe: does text selection work in Qwen's narrow ("mobile") layout?
 import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 
@@ -7,123 +7,75 @@ await fs.mkdir(OUT, { recursive: true });
 const report = [];
 const say = (k, v) => report.push(`## ${k}\n${typeof v === 'string' ? v : JSON.stringify(v, null, 1)}\n`);
 
-const browser = await chromium.launch();
-const ctx = await browser.newContext({ viewport: { width: 400, height: 860 }, locale: 'en-US' });
-const page = await ctx.newPage();
+async function experiment(width) {
+  const browser = await chromium.launch();
+  const ctx = await browser.newContext({ viewport: { width, height: 860 }, locale: 'en-US' });
+  const page = await ctx.newPage();
+  await page.goto('https://chat.qwen.ai', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForTimeout(8000);
 
-await page.goto('https://chat.qwen.ai', { waitUntil: 'domcontentloaded', timeout: 60000 });
-await page.waitForTimeout(8000);
-await page.screenshot({ path: `${OUT}/narrow-loaded.png` });
-
-say('viewport', page.viewportSize());
-
-say(
-  'selection styles',
-  await page.evaluate(() => {
-    const pick = (el) => {
-      const s = getComputedStyle(el);
-      return {
-        el: `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}.${typeof el.className === 'string' ? el.className.split(/\s+/).slice(0, 3).join('.') : ''}`,
-        userSelect: s.userSelect,
-        webkitUserSelect: s.webkitUserSelect,
-        pointerEvents: s.pointerEvents
-      };
-    };
-    const chain = (el) => {
-      const out = [];
-      let node = el;
-      for (let i = 0; i < 6 && node; i += 1, node = node.parentElement) out.push(pick(node));
-      return out;
-    };
-    const main = document.querySelector('main') || document.body;
+  const meta = await page.evaluate(() => {
+    const el = [...document.querySelectorAll('*')].find((e) => /How can I help you/i.test(e.textContent || '') && e.children.length === 0);
+    const s = el ? getComputedStyle(el) : null;
     return {
-      body: pick(document.body),
-      root: document.querySelector('#root') ? pick(document.querySelector('#root')) : null,
-      mainChain: chain(main),
-      headingChain: chain([...document.querySelectorAll('h1,h2,h3,div,span')].find((e) => /How can I help you/i.test(e.textContent || '')) || document.body)
+      htmlClass: document.documentElement.className,
+      touchAction: document.body.style.touchAction || getComputedStyle(document.body).touchAction,
+      el: el ? el.tagName + '.' + el.className : null,
+      userSelect: s ? s.userSelect : null,
+      webkitUserSelect: s ? s.webkitUserSelect : null
     };
-  })
-);
+  });
+  say(`${width}px: meta`, meta);
 
-say(
-  'hit test',
-  await page.evaluate(() => {
-    const describe = (el) => {
-      if (!el) return null;
-      const s = getComputedStyle(el);
-      const r = el.getBoundingClientRect();
-      return {
-        el: `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}.${typeof el.className === 'string' ? el.className.split(/\s+/).slice(0, 3).join('.') : ''}`,
-        rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
-        userSelect: s.userSelect,
-        pointerEvents: s.pointerEvents,
-        position: s.position,
-        zIndex: s.zIndex,
-        text: (el.textContent || '').trim().slice(0, 60)
-      };
+  const target = page.getByText('How can I help you?').first();
+  const box = await target.boundingBox();
+  if (!box) {
+    say(`${width}px: target`, 'not found');
+    await browser.close();
+    return;
+  }
+
+  const readSelection = () => page.evaluate(() => {
+    const sel = getSelection();
+    return { text: sel ? sel.toString().slice(0, 80) : null, ranges: sel ? sel.rangeCount : 0 };
+  });
+
+  // 1. drag across the text
+  await page.mouse.move(box.x + 3, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width - 3, box.y + box.height / 2, { steps: 12 });
+  await page.mouse.up();
+  say(`${width}px: drag`, await readSelection());
+  await page.screenshot({ path: `${OUT}/select-drag-${width}.png` });
+
+  // 2. triple click
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { clickCount: 3 });
+  say(`${width}px: triple click`, await readSelection());
+
+  // 3. Ctrl+A
+  await page.keyboard.press('Control+A');
+  say(`${width}px: ctrl+a`, await readSelection());
+
+  // 4. does a mousedown handler cancel the event?
+  say(`${width}px: mousedown defaultPrevented`, await page.evaluate(() => {
+    let prevented = null;
+    const probe = (e) => {
+      setTimeout(() => {
+        prevented = e.defaultPrevented;
+      }, 0);
     };
-    const points = [];
-    for (const fy of [0.25, 0.4, 0.55, 0.7]) {
-      points.push([Math.round(innerWidth * 0.5), Math.round(innerHeight * fy)]);
-    }
-    return points.map(([x, y]) => {
-      let el = document.elementFromPoint(x, y);
-      const chain = [];
-      for (let i = 0; i < 5 && el; i += 1, el = el.parentElement) chain.push(describe(el));
-      return { point: [x, y], chain };
-    });
-  })
-);
+    document.addEventListener('mousedown', probe, true);
+    const el = document.elementFromPoint(200, 200);
+    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
+    document.removeEventListener('mousedown', probe, true);
+    return prevented;
+  }));
 
-say(
-  'large overlays',
-  await page.evaluate(() => {
-    const out = [];
-    for (const el of document.querySelectorAll('body *')) {
-      const s = getComputedStyle(el);
-      if (s.position !== 'fixed' && s.position !== 'absolute') continue;
-      const r = el.getBoundingClientRect();
-      if (!r.width || !r.height) continue;
-      if (r.width * r.height < innerWidth * innerHeight * 0.4) continue;
-      out.push({
-        el: `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}.${typeof el.className === 'string' ? el.className.split(/\s+/).slice(0, 4).join('.') : ''}`,
-        rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
-        pointerEvents: s.pointerEvents,
-        zIndex: s.zIndex,
-        overflow: s.overflow,
-        cursor: s.cursor
-      });
-    }
-    return out.slice(0, 25);
-  })
-);
+  await browser.close();
+}
 
-say(
-  'css rules with user-select:none',
-  await page.evaluate(() => {
-    const hits = [];
-    for (const sheet of document.styleSheets) {
-      let rules;
-      try {
-        rules = sheet.cssRules;
-      } catch {
-        continue;
-      }
-      const walk = (list, media) => {
-        for (const rule of list) {
-          if (rule.cssRules && rule.conditionText !== undefined) {
-            walk(rule.cssRules, rule.conditionText);
-          } else if (rule.style && rule.style.userSelect === 'none') {
-            hits.push(`${media ? `@media ${media} ` : ''}${rule.selectorText}`);
-          }
-        }
-      };
-      walk(rules, '');
-    }
-    return [...new Set(hits)].slice(0, 40);
-  })
-);
+await experiment(1280);
+await experiment(400);
 
-await browser.close();
 await fs.writeFile(`${OUT}/report.md`, report.join('\n'), 'utf8');
 console.log(report.join('\n'));
