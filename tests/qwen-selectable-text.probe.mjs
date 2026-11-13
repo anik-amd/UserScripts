@@ -120,7 +120,10 @@ const noMouse = await drag('t-msg');
 const counters = await page.evaluate(() => window.__mouseEvents);
 await page.evaluate(() => window.__unblockPointer());
 say('drag with pointerdown default cancelled', { selected: noMouse, counters });
-check('drag selects text when pointerdown is cancelled (no mouse events)', noMouse.includes(MESSAGES['t-msg']), noMouse);
+// In this headless browser the compatibility mouse events still fire, so the pointerup path only
+// proves itself on the live site (verified separately in Brave's mobile layout, where a cancelled
+// pointerdown suppresses mousedown/mouseup entirely).
+check('drag selects text when a pointerdown handler cancels the event', noMouse.includes(MESSAGES['t-msg']), noMouse);
 
 // ---- 3. transparent overlay above the message ----
 await page.evaluate(() => {
