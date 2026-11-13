@@ -57,14 +57,40 @@ await page.evaluate((message) => {
 
 async function dragSelect() {
   const box = await page.locator('#probe-msg').boundingBox();
+  const x1 = box.x + 2;
+  const x2 = box.x + box.width - 2;
+  const y = box.y + box.height / 2;
+  const stack = await page.evaluate(
+    ([x, y]) =>
+      document.elementsFromPoint(x, y).slice(0, 5).map((el) => `${el.tagName}.${String(el.className).slice(0, 40)}`),
+    [x1, y]
+  );
+  await page.mouse.move(x1, y);
+  await page.mouse.down();
+  await page.mouse.move(x2, y, { steps: 10 });
+  const mid = await page.evaluate(() => getSelection().toString());
+  await page.mouse.up();
+  await page.waitForTimeout(120);
+  const after = await page.evaluate(() => getSelection().toString());
+  return { stack, mid, after };
+}
+
+// Control: same drag on a plain div, outside the site's content classes.
+async function dragPlain() {
+  await page.evaluate(() => {
+    const div = document.createElement('div');
+    div.id = 'probe-plain';
+    div.textContent = 'plain selectable text';
+    div.style.cssText = 'position:fixed;left:16px;top:320px;width:320px;z-index:90001;background:#fff';
+    document.body.appendChild(div);
+  });
+  const box = await page.locator('#probe-plain').boundingBox();
   await page.mouse.move(box.x + 2, box.y + box.height / 2);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2, { steps: 10 });
   const mid = await page.evaluate(() => getSelection().toString());
   await page.mouse.up();
-  await page.waitForTimeout(120);
-  const after = await page.evaluate(() => getSelection().toString());
-  return { mid, after };
+  return mid;
 }
 
 say('css unlocked', await page.evaluate(() => {
@@ -79,6 +105,7 @@ await page.evaluate(() => {
   }, true);
 });
 say('drag select', await dragSelect());
+say('drag plain div (control)', await dragPlain());
 say('selectionchange trace', await page.evaluate(() => window.__selTrace || null));
 
 // ---- hostile: site blocks pointerdown/mousedown at window level ----
