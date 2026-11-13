@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Qwen Chat - Selectable Text
 // @namespace    https://github.com/anik-amd/UserScripts
-// @version      1.5.0
+// @version      1.5.1
 // @description  Restores text selection and copying of chat messages (AI replies and your own) in Qwen Chat, including in narrow windows where the site switches to its mobile layout.
 // @author       anik-amd
 // @homepageURL  https://github.com/anik-amd/UserScripts
@@ -235,8 +235,15 @@
     }, 0);
   }
 
+  // A site handler can call preventDefault() on pointerdown, which stops the compatibility
+  // mousedown/mouseup pair from being dispatched at all in Chromium. Listen to both pointer and
+  // mouse events so the repair still runs in the mobile layout; the second call is a no-op
+  // because `drag` is cleared by the first.
   window.addEventListener('pointerdown', beginDrag, true);
+  window.addEventListener('mousedown', beginDrag, true);
+  window.addEventListener('pointerup', finishDrag, true);
   window.addEventListener('mouseup', finishDrag, true);
+  window.addEventListener('pointercancel', () => { drag = null; }, true);
 
   // 6. Copy. Qwen rewrites the clipboard on copy (attribution / formatted markdown) in some
   //    builds, and at narrow widths that path can end up copying nothing. When the selection

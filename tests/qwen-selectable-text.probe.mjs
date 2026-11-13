@@ -105,6 +105,23 @@ const underBlock = await drag('t-msg');
 say('drag t-msg with site preventDefault', { selected: underBlock, blocked: await page.evaluate(() => window.__blocked) });
 check('drag selects text while the site cancels pointer events', underBlock.includes(MESSAGES['t-msg']), underBlock);
 
+// ---- 2b. mobile layout: preventDefault on pointerdown suppresses mousedown/mouseup entirely ----
+await page.evaluate(() => {
+  window.__mouseEvents = { mousedown: 0, mouseup: 0, pointerup: 0 };
+  for (const type of ['mousedown', 'mouseup', 'pointerup']) {
+    window.addEventListener(type, () => { window.__mouseEvents[type] += 1; }, true);
+  }
+  const block = (e) => e.preventDefault();
+  window.addEventListener('pointerdown', block, true);
+  window.__unblockPointer = () => window.removeEventListener('pointerdown', block, true);
+});
+await page.evaluate(() => getSelection().removeAllRanges());
+const noMouse = await drag('t-msg');
+const counters = await page.evaluate(() => window.__mouseEvents);
+await page.evaluate(() => window.__unblockPointer());
+say('drag with pointerdown default cancelled', { selected: noMouse, counters });
+check('drag selects text when pointerdown is cancelled (no mouse events)', noMouse.includes(MESSAGES['t-msg']), noMouse);
+
 // ---- 3. transparent overlay above the message ----
 await page.evaluate(() => {
   const overlay = document.createElement('div');
