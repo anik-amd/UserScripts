@@ -11,6 +11,7 @@ on:
         options:
           - dom
           - copy
+          - selectable
 
 jobs:
   probe:
@@ -33,11 +34,11 @@ jobs:
 
       - name: Run probe
         run: |
-          if [ "${{ inputs.probe }}" = "copy" ]; then
-            node tests/qwen-copy.probe.mjs
-          else
-            node tests/qwen-enter-to-send.probe.mjs
-          fi
+          case "${{ inputs.probe }}" in
+            copy) node tests/qwen-copy.probe.mjs ;;
+            selectable) node tests/qwen-selectable-text.probe.mjs ;;
+            *) node tests/qwen-enter-to-send.probe.mjs ;;
+          esac
         continue-on-error: true
 
       - uses: actions/upload-artifact@v4
