@@ -1,4 +1,4 @@
-// Throwaway probe: inspects chat.qwen.ai composer DOM and Enter behaviour.
+// Throwaway probe v2: exact composer DOM, send-control element, network on Enter/click.
 import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 
@@ -9,93 +9,100 @@ const say = (key, value) => report.push(`## ${key}\n${typeof value === 'string' 
 
 const US = await fs.readFile('scripts/qwen-enter-to-send.user.js', 'utf8');
 
-function collect(page) {
-  return page.evaluate(() => {
-    const vis = (el) => {
-      const r = el.getBoundingClientRect();
-      return r.width > 1 && r.height > 1;
-    };
-    const editors = [...document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""]')].map((el) => ({
+const DUMP = () => {
+  const vis = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 1 && r.height > 1;
+  };
+  const byName = [...document.querySelectorAll('*')]
+    .filter((el) => {
+      const n = `${el.id || ''} ${typeof el.className === 'string' ? el.className : ''}`;
+      return /send|submit/i.test(n) && vis(el);
+    })
+    .slice(0, 20)
+    .map((el) => ({
       tag: el.tagName,
-      cls: el.className,
-      placeholder: el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || '',
-      html: el.outerHTML.slice(0, 1500)
+      id: el.id,
+      cls: typeof el.className === 'string' ? el.className : '',
+      role: el.getAttribute('role'),
+      label: el.getAttribute('aria-label'),
+      html: el.outerHTML.slice(0, 900)
     }));
-    const buttons = [...document.querySelectorAll('button, [role="button"]')]
-      .filter(vis)
-      .slice(0, 60)
-      .map((el) => ({
-        label: el.getAttribute('aria-label'),
-        title: el.getAttribute('title'),
-        testid: el.getAttribute('data-testid'),
-        cls: typeof el.className === 'string' ? el.className : '',
-        disabled: el.disabled,
-        html: el.outerHTML.slice(0, 500)
-      }));
-    const bodyText = (document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 1500);
-    return { editors, buttons, bodyText };
-  });
-}
+  const ta = document.querySelector('textarea');
+  let composer = null;
+  if (ta) {
+    let node = ta;
+    for (let i = 0; i < 4 && node.parentElement; i += 1) node = node.parentElement;
+    composer = node.outerHTML.slice(0, 4000);
+  }
+  return { byName, composer };
+};
 
-async function run(label, inject) {
+async function run(label, inject, action) {
   const browser = await chromium.launch();
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'en-US' });
   const page = await ctx.newPage();
-  const errors = [];
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text().slice(0, 200)));
+  const net = [];
+  page.on('request', (r) => {
+    if (r.method() !== 'GET' && !/\.(js|css|png|svg|woff2?|ico)(\?|$)/.test(r.url())) {
+      net.push(`${r.method()} ${r.url().slice(0, 160)}`);
+    }
+  });
 
   if (inject) await page.addInitScript(US);
+  await page.goto('https://chat.qwen.ai', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForTimeout(7000);
 
-  await page.goto('https://chat.qwen.ai', { waitUntil: 'domcontentloaded', timeout: 60000 }).catch((e) => say(`${label}: goto error`, e.message));
-  await page.waitForTimeout(8000);
+  const dom = await page.evaluate(DUMP);
+  say(`${label}: send-named elements`, dom.byName);
+  say(`${label}: composer html`, dom.composer);
 
-  say(`${label}: url`, page.url());
-  say(`${label}: title`, await page.title());
-  const before = await collect(page);
-  say(`${label}: editors`, before.editors);
-  say(`${label}: buttons`, before.buttons);
-  say(`${label}: bodyText`, before.bodyText);
-  await page.screenshot({ path: `${OUT}/${label}-1-loaded.png`, fullPage: false });
+  const before = await page.evaluate(() => (document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 300));
+  say(`${label}: modal before typing`, /Welcome to Qwen/i.test(before));
 
-  const editor = page.locator('textarea, [contenteditable="true"], [contenteditable=""]').first();
-  let typed = false;
-  try {
-    await editor.waitFor({ state: 'visible', timeout: 15000 });
-    await editor.click();
-    await editor.type('probe message ' + label, { delay: 20 });
-    typed = true;
-  } catch (e) {
-    say(`${label}: type failed`, e.message);
+  const ta = page.locator('textarea').first();
+  await ta.click();
+  await ta.type('probe ' + label, { delay: 15 });
+  const netAfterType = net.length;
+  await page.screenshot({ path: `${OUT}/${label}-typed.png` });
+
+  if (action === 'enter') await page.keyboard.press('Enter');
+  if (action === 'click') {
+    const clicked = await page.evaluate(() => {
+      const vis = (el) => {
+        const r = el.getBoundingClientRect();
+        return r.width > 1 && r.height > 1;
+      };
+      const cands = [...document.querySelectorAll('div, span, button')].filter((el) => {
+        const n = `${el.id || ''} ${typeof el.className === 'string' ? el.className : ''}`;
+        return /send|submit/i.test(n) && vis(el);
+      });
+      const target = cands[cands.length - 1];
+      if (!target) return null;
+      target.click();
+      return `${target.tagName}.${target.className}`;
+    });
+    say(`${label}: clicked`, clicked);
   }
 
-  if (typed) {
-    await page.screenshot({ path: `${OUT}/${label}-2-typed.png` });
-    const stateBefore = await page.evaluate(() => {
-      const el = document.querySelector('textarea, [contenteditable="true"], [contenteditable=""]');
-      return el ? (el.value ?? el.innerText) : null;
-    });
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(5000);
-    const stateAfter = await page.evaluate(() => {
-      const el = document.querySelector('textarea, [contenteditable="true"], [contenteditable=""]');
-      return el ? (el.value ?? el.innerText) : null;
-    });
-    const bubbles = await page.evaluate(() =>
-      (document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 2500)
-    );
-    say(`${label}: editor value before Enter`, stateBefore);
-    say(`${label}: editor value after Enter`, stateAfter);
-    say(`${label}: page text after Enter`, bubbles);
-    say(`${label}: newline inserted`, String(stateAfter).includes('\n'));
-    await page.screenshot({ path: `${OUT}/${label}-3-after-enter.png` });
-  }
-
-  say(`${label}: console errors`, errors.slice(0, 20));
+  await page.waitForTimeout(5000);
+  const after = await page.evaluate(() => {
+    const el = document.querySelector('textarea');
+    return {
+      value: el ? el.value : null,
+      body: (document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 600)
+    };
+  });
+  say(`${label}: textarea after`, after.value);
+  say(`${label}: body after`, after.body);
+  say(`${label}: requests after action`, net.slice(netAfterType));
+  await page.screenshot({ path: `${OUT}/${label}-after.png` });
   await browser.close();
 }
 
-await run('native', false);
-await run('userscript', true);
+await run('native-enter', false, 'enter');
+await run('native-click', false, 'click');
+await run('userscript-enter', true, 'enter');
 
 await fs.writeFile(`${OUT}/report.md`, report.join('\n'), 'utf8');
 console.log(report.join('\n'));
