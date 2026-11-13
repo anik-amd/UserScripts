@@ -49,6 +49,8 @@ await page.evaluate((message) => {
   const wrap = document.createElement('div');
   wrap.className = 'qwen-markdown';
   wrap.id = 'probe-msg';
+  // Fixed placement inside the viewport: appending to <body> can land below the fold.
+  wrap.style.cssText = 'position:fixed;left:16px;top:220px;width:320px;z-index:90000;background:#fff';
   wrap.innerHTML = `<div class="qwen-markdown-paragraph"><span class="qwen-markdown-text"><span class="qwen-markdown-text-node">${message}</span></span></div>`;
   document.body.appendChild(wrap);
 }, MESSAGE);
