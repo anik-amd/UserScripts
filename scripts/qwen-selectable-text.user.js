@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Qwen Chat - Selectable Text
 // @namespace    https://github.com/anik-amd/UserScripts
-// @version      1.3.0
+// @version      1.4.0
 // @description  Restores text selection and copying of chat messages (AI replies and your own) in Qwen Chat, including in narrow windows where the site switches to its mobile layout.
 // @author       anik-amd
 // @homepageURL  https://github.com/anik-amd/UserScripts
@@ -29,8 +29,23 @@
     '.chat-message'
   ].join(',');
 
+  const INTERACTIVE = 'button, a[href], input, textarea, select, summary, [role="button"], [role="link"], [contenteditable="true"]';
+
+  function inContent(target) {
+    return target instanceof Element && !!target.closest(CONTENT);
+  }
+
+  /** Nearest message body at a viewport point, looking through transparent overlays. */
+  function messageAtPoint(x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    for (const el of document.elementsFromPoint(x, y)) {
+      const scope = el.closest(CONTENT);
+      if (scope) return scope;
+    }
+    return null;
+  }
+
   // 1. Stylesheet pass. Covers the common case and applies before React even mounts.
-  //    (A site rule with equal specificity declared later would win, hence step 2.)
   function addStyle() {
     const style = document.createElement('style');
     style.id = 'us-qwen-selectable';
@@ -50,8 +65,8 @@
     document.addEventListener('DOMContentLoaded', addStyle, { once: true });
   }
 
-  // 2. Inline pass. Inline `!important` beats every stylesheet rule, so the logged-in
-  //    chat UI cannot win by loading its `user-select: none` later or with higher specificity.
+  // 2. Inline pass. Inline `!important` beats every stylesheet rule, so the logged-in UI
+  //    cannot win by loading its `user-select: none` later or with higher specificity.
   const PROPS = [
     ['-webkit-user-select', 'text'],
     ['user-select', 'text'],
@@ -86,7 +101,6 @@
     }
   }
 
-  // Re-apply when the site re-renders a message (class/style churn) or streams new text in.
   const observer = new MutationObserver((records) => {
     for (const record of records) {
       if (record.type === 'attributes') {
@@ -113,46 +127,48 @@
     document.addEventListener('DOMContentLoaded', start, { once: true });
   }
 
-  // 3. The mobile layout cancels the pointer events that begin a drag selection. Swallow them
-  //    before any site handler runs — including handlers on the same node (stopImmediate) and
-  //    handlers on a transparent overlay that sits above the text (hit-test the whole stack).
-  const INTERACTIVE = 'button, a[href], input, textarea, select, summary, [role="button"], [role="link"], [contenteditable="true"]';
+  // 3. The mobile layout cancels the pointer events that begin a drag selection. Blocking
+  //    propagation is not an option: the event must still reach the text for the browser to
+  //    start a selection. Instead, make `preventDefault()` a no-op for those events while a
+  //    drag begins over message text.
+  const SELECTION_EVENTS = new Set(['pointerdown', 'mousedown', 'selectstart', 'touchstart']);
+  const nativePreventDefault = Event.prototype.preventDefault;
+  let neutralize = false;
+  let neutralizeTimer = 0;
 
-  function inContent(target) {
-    return target instanceof Element && !!target.closest(CONTENT);
-  }
+  Event.prototype.preventDefault = function () {
+    if (neutralize && SELECTION_EVENTS.has(this.type)) return;
+    return nativePreventDefault.call(this);
+  };
 
-  function overContent(x, y) {
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
-    const stack = document.elementsFromPoint(x, y);
-    // The overlay itself is not in CONTENT, but the text underneath it is.
-    return stack.some((el) => !!el.closest(CONTENT));
-  }
-
-  function swallow(event) {
-    if (event.button !== 0) return;
+  function startDrag(event) {
     const target = event.target;
     if (!(target instanceof Element)) return;
-    if (!inContent(target) && !overContent(event.clientX, event.clientY)) return;
     if (target.closest(INTERACTIVE)) return;
-    event.stopImmediatePropagation();
+    if (!inContent(target) && !messageAtPoint(event.clientX, event.clientY)) return;
+
+    neutralize = true;
+    clearTimeout(neutralizeTimer);
+    neutralizeTimer = setTimeout(() => {
+      neutralize = false;
+    }, 0);
   }
 
-  window.addEventListener('mousedown', swallow, true);
-  window.addEventListener('pointerdown', swallow, true);
+  function endDrag() {
+    clearTimeout(neutralizeTimer);
+    neutralize = false;
+  }
 
-  // 4. Some handlers call preventDefault() on selectstart; keep them from seeing it.
-  window.addEventListener(
-    'selectstart',
-    (event) => {
-      if (event.target instanceof Element && inContent(event.target)) event.stopImmediatePropagation();
-    },
-    true
-  );
+  for (const type of ['pointerdown', 'mousedown', 'touchstart']) {
+    window.addEventListener(type, startDrag, true);
+  }
+  for (const type of ['pointerup', 'mouseup', 'touchend', 'dragend']) {
+    window.addEventListener(type, endDrag, true);
+  }
 
-  // 5. Copy. Qwen rewrites the clipboard on copy (attribution / formatted markdown) in some
+  // 4. Copy. Qwen rewrites the clipboard on copy (attribution / formatted markdown) in some
   //    builds, and at narrow widths that path can end up copying nothing. When the selection
-  //    sits inside a message, let the browser perform the copy natively instead.
+  //    sits inside a message, let the browser copy natively instead.
   function selectionInContent() {
     const selection = getSelection();
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
@@ -182,7 +198,7 @@
     true
   );
 
-  // 6. Escape hatches for layouts where no pointer drag ever starts a selection.
+  // 5. Escape hatches for layouts where no pointer drag starts a selection at all.
   function selectContents(el) {
     const range = document.createRange();
     range.selectNodeContents(el);
@@ -191,14 +207,14 @@
     selection.addRange(range);
   }
 
-  // Double-click a reply: select the whole message if the native word-select didn't happen.
+  // Double-click a reply: fall back to selecting the whole message when the native
+  // word-select did not happen (or when an overlay swallowed the event).
   window.addEventListener(
     'dblclick',
     (event) => {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      if (target.closest(INTERACTIVE)) return;
-      const scope = target.closest(CONTENT);
+      const target = event.target instanceof Element ? event.target : null;
+      if (target && target.closest(INTERACTIVE)) return;
+      const scope = (target && target.closest(CONTENT)) || messageAtPoint(event.clientX, event.clientY);
       if (!scope) return;
       setTimeout(() => {
         if (!selectionInContent()) selectContents(scope);
@@ -208,11 +224,12 @@
   );
 
   // Alt+C copies the message under the pointer (or the last one), no selection needed.
-  let hovered = null;
+  let pointer = { x: NaN, y: NaN };
+
   document.addEventListener(
     'mousemove',
     (event) => {
-      hovered = event.target instanceof Element ? event.target : null;
+      pointer = { x: event.clientX, y: event.clientY };
     },
     true
   );
@@ -223,7 +240,11 @@
       if (!event.altKey || event.ctrlKey || event.metaKey) return;
       if (String(event.key).toLowerCase() !== 'c') return;
 
-      const scope = (hovered && hovered.closest(CONTENT)) || document.querySelector(`${CONTENT}:last-of-type`);
+      const hovered = document.elementFromPoint(pointer.x, pointer.y);
+      const scope =
+        (hovered instanceof Element && hovered.closest(CONTENT)) ||
+        messageAtPoint(pointer.x, pointer.y) ||
+        [...document.querySelectorAll(CONTENT)].pop();
       if (!scope) return;
 
       const text = (scope.innerText || scope.textContent || '').trim();
