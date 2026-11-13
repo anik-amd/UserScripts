@@ -1,4 +1,4 @@
-// Throwaway probe: selection must survive site pointer blocking, overlays, and copy hijacking.
+// Throwaway probe: isolate what stops a drag selection on .qwen-markdown.
 import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 
@@ -9,7 +9,6 @@ const say = (k, v) => report.push(`## ${k}\n${typeof v === 'string' ? v : JSON.s
 
 const SELECT_SCRIPT = await fs.readFile('scripts/qwen-selectable-text.user.js', 'utf8');
 const SEND_SCRIPT = await fs.readFile('scripts/qwen-enter-to-send.user.js', 'utf8');
-
 const flush = () => fs.writeFile(`${OUT}/report.md`, report.join('\n'), 'utf8');
 process.on('unhandledRejection', async (e) => {
   say('FAILED', String((e && e.message) || e));
@@ -18,163 +17,86 @@ process.on('unhandledRejection', async (e) => {
 });
 
 const browser = await chromium.launch();
-const ctx = await browser.newContext({
-  viewport: { width: 400, height: 860 },
-  locale: 'en-US',
-  permissions: ['clipboard-read', 'clipboard-write']
-});
+const ctx = await browser.newContext({ viewport: { width: 400, height: 860 }, locale: 'en-US' });
 const page = await ctx.newPage();
-const errors = [];
-page.on('console', (m) => m.type() === 'error' && errors.push(m.text().slice(0, 160)));
-page.on('pageerror', (e) => errors.push('pageerror: ' + e.message.slice(0, 160)));
-
 await page.addInitScript(SELECT_SCRIPT);
 await page.addInitScript(SEND_SCRIPT);
 await page.goto('https://chat.qwen.ai', { waitUntil: 'domcontentloaded', timeout: 60000 });
 await page.waitForTimeout(8000);
 await page.evaluate(() => document.querySelector('[class*="cookie-confirm"]')?.remove());
 
-// ---- setup: hostile CSS (loaded after the script, like the site bundle) ----
 await page.evaluate(() => {
-  const hostile = document.createElement('style');
-  hostile.textContent = `
-    .qwen-markdown, .qwen-markdown * { -webkit-user-select: none; user-select: none; }
-    .message-inner-ci, .message-inner-ci * { user-select: none !important; }
-  `;
-  document.head.appendChild(hostile);
+  const make = (id, top, className, inline, inner) => {
+    const div = document.createElement('div');
+    div.id = id;
+    if (className) div.className = className;
+    div.style.cssText = `position:fixed;left:16px;top:${top}px;width:320px;z-index:90000;background:#fff;${inline || ''}`;
+    div.innerHTML = inner;
+    document.body.appendChild(div);
+  };
+
+  make('t-plain', 120, '', '', 'plain selectable text');
+  make('t-class', 180, 'qwen-markdown', '', 'class selectable text');
+  make('t-inline', 240, '', 'user-select:text !important;-webkit-user-select:text !important', '<span>inline selectable text</span>');
+  make(
+    't-msg',
+    300,
+    'qwen-markdown',
+    '',
+    '<div class="qwen-markdown-paragraph"><span class="qwen-markdown-text"><span class="qwen-markdown-text-node">nested selectable text</span></span></div>'
+  );
+
+  window.__selEvents = [];
+  document.addEventListener(
+    'selectstart',
+    (e) => {
+      const seen = { prevented: e.defaultPrevented, target: String(e.target.className || e.target.id || e.target.tagName).slice(0, 40) };
+      setTimeout(() => {
+        seen.laterPrevented = e.defaultPrevented;
+        window.__selEvents.push(seen);
+      }, 0);
+    },
+    true
+  );
 });
 
-const MESSAGE = 'copyable reply text';
-await page.evaluate((message) => {
-  const wrap = document.createElement('div');
-  wrap.className = 'qwen-markdown';
-  wrap.id = 'probe-msg';
-  // Fixed placement inside the viewport: appending to <body> can land below the fold.
-  wrap.style.cssText = 'position:fixed;left:16px;top:220px;width:320px;z-index:90000;background:#fff';
-  wrap.innerHTML = `<div class="qwen-markdown-paragraph"><span class="qwen-markdown-text"><span class="qwen-markdown-text-node">${message}</span></span></div>`;
-  document.body.appendChild(wrap);
-}, MESSAGE);
-
-async function dragSelect() {
-  const box = await page.locator('#probe-msg').boundingBox();
-  const x1 = box.x + 2;
-  const x2 = box.x + box.width - 2;
-  const y = box.y + box.height / 2;
-  const stack = await page.evaluate(
-    ([x, y]) =>
-      document.elementsFromPoint(x, y).slice(0, 5).map((el) => `${el.tagName}.${String(el.className).slice(0, 40)}`),
-    [x1, y]
-  );
-  await page.mouse.move(x1, y);
-  await page.mouse.down();
-  await page.mouse.move(x2, y, { steps: 10 });
-  const mid = await page.evaluate(() => getSelection().toString());
-  await page.mouse.up();
-  await page.waitForTimeout(120);
-  const after = await page.evaluate(() => getSelection().toString());
-  return { stack, mid, after };
-}
-
-// Control: same drag on a plain div, outside the site's content classes.
-async function dragPlain() {
-  await page.evaluate(() => {
-    const div = document.createElement('div');
-    div.id = 'probe-plain';
-    div.textContent = 'plain selectable text';
-    div.style.cssText = 'position:fixed;left:16px;top:320px;width:320px;z-index:90001;background:#fff';
-    document.body.appendChild(div);
-  });
-  const box = await page.locator('#probe-plain').boundingBox();
+async function drag(id) {
+  const box = await page.locator('#' + id).boundingBox();
   await page.mouse.move(box.x + 2, box.y + box.height / 2);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2, { steps: 10 });
   const mid = await page.evaluate(() => getSelection().toString());
   await page.mouse.up();
-  return mid;
+  await page.waitForTimeout(100);
+  const after = await page.evaluate(() => getSelection().toString());
+  const computed = await page.evaluate((elId) => {
+    const node = document.querySelector('#' + elId);
+    const s = getComputedStyle(node);
+    return {
+      userSelect: s.userSelect,
+      webkitUserSelect: s.webkitUserSelect,
+      pointerEvents: s.pointerEvents,
+      inline: node.getAttribute('style')
+    };
+  }, id);
+  return { mid, after, computed };
 }
 
-say('css unlocked', await page.evaluate(() => {
-  const node = document.querySelector('#probe-msg .qwen-markdown-text-node');
-  return { userSelect: getComputedStyle(node).userSelect, inline: node.style.getPropertyValue('user-select') };
+for (const id of ['t-plain', 't-class', 't-inline', 't-msg']) {
+  await page.evaluate(() => getSelection().removeAllRanges());
+  say(`drag ${id}`, await drag(id));
+}
+
+say('selectstart events', await page.evaluate(() => window.__selEvents));
+
+// does the site cancel a programmatically dispatched selectstart?
+say('dispatch selectstart', await page.evaluate(() => {
+  const node = document.querySelector('#t-msg .qwen-markdown-text-node');
+  const event = new Event('selectstart', { bubbles: true, cancelable: true });
+  node.dispatchEvent(event);
+  return { defaultPrevented: event.defaultPrevented };
 }));
 
-await page.evaluate(() => {
-  window.__selTrace = [];
-  document.addEventListener('selectionchange', () => {
-    window.__selTrace.push(getSelection().toString().slice(0, 40));
-  }, true);
-});
-say('drag select', await dragSelect());
-say('drag plain div (control)', await dragPlain());
-say('selectionchange trace', await page.evaluate(() => window.__selTrace || null));
-
-// ---- hostile: site blocks pointerdown/mousedown at window level ----
-await page.evaluate(() => {
-  window.__pointerSeen = 0;
-  const block = (e) => {
-    window.__pointerSeen += 1;
-    e.preventDefault();
-  };
-  window.addEventListener('mousedown', block, true);
-  window.addEventListener('pointerdown', block, true);
-});
-say('drag under window-level block', await dragSelect());
-say('site pointer handlers saw', await page.evaluate(() => window.__pointerSeen));
-
-// ---- hostile: transparent overlay above the message ----
-await page.evaluate(() => {
-  const overlay = document.createElement('div');
-  overlay.id = 'probe-overlay';
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:transparent';
-  overlay.addEventListener('mousedown', (e) => e.preventDefault(), true);
-  document.body.appendChild(overlay);
-  getSelection().removeAllRanges();
-});
-say('drag under overlay', await dragSelect());
-
-// double-click fallback must still select the message through the overlay
-await page.evaluate(() => getSelection().removeAllRanges());
-const box = await page.locator('#probe-msg').boundingBox();
-await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
-await page.waitForTimeout(200);
-say('double-click selection', await page.evaluate(() => getSelection().toString()));
-
-// Alt+C must copy the message without any selection
-await page.evaluate(() => getSelection().removeAllRanges());
-await page.evaluate(() => navigator.clipboard.writeText('BEFORE-ALT-C'));
-await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-await page.keyboard.press('Alt+c');
-await page.waitForTimeout(400);
-say('alt+c clipboard', await page.evaluate(() => navigator.clipboard.readText()));
-
-// remove overlay + hijackers before the send regression
-await page.evaluate(() => document.querySelector('#probe-overlay')?.remove());
-await page.evaluate(() => location.reload());
-await page.waitForTimeout(8000);
-await page.evaluate(() => document.querySelector('[class*="cookie-confirm"]')?.remove());
-
-// ---- regression: Enter-to-send still fires exactly one send ----
-const ta = page.locator('textarea').first();
-await ta.click({ force: true });
-await ta.type('probe selectable', { delay: 10 });
-await page.evaluate(() => {
-  window.__clicks = [];
-  const native = HTMLElement.prototype.click;
-  HTMLElement.prototype.click = function () {
-    window.__clicks.push(`${this.tagName}.${typeof this.className === 'string' ? this.className : ''}`);
-    return native.apply(this, arguments);
-  };
-});
-await page.keyboard.press('Enter');
-await page.waitForTimeout(4000);
-say('send after fix', await page.evaluate(() => ({
-  clicks: window.__clicks || [],
-  value: document.querySelector('textarea')?.value,
-  loginWall: /Welcome to Qwen/i.test(document.body.innerText || '')
-})));
-
-await page.screenshot({ path: `${OUT}/selectable-v13.png` });
-say('console errors', errors.slice(0, 10));
 await browser.close();
 await flush();
 console.log(report.join('\n'));
