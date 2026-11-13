@@ -1,4 +1,4 @@
-// Throwaway probe: userscript must unlock user-select:none content and not break Enter-to-send.
+// Throwaway probe: inline !important must beat a hostile site rule; Enter-to-send must survive.
 import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 
@@ -22,30 +22,35 @@ await page.addInitScript(SEND_SCRIPT);
 await page.goto('https://chat.qwen.ai', { waitUntil: 'domcontentloaded', timeout: 60000 });
 await page.waitForTimeout(8000);
 
-// Synthetic message body with a hostile user-select:none rule, like the logged-in UI.
-say('synthetic block', await page.evaluate(() => {
+// Hostile rules added AFTER the userscript, like the logged-in bundle does.
+say('hostile css installed', await page.evaluate(() => {
   const hostile = document.createElement('style');
   hostile.textContent = `
     .qwen-markdown, .qwen-markdown * { -webkit-user-select: none; user-select: none; }
-    .message-inner-ci { user-select: none !important; }
+    .message-inner-ci, .message-inner-ci * { user-select: none !important; }
+    html.mobile .message-inner-ci .qwen-markdown p { user-select: none !important; }
   `;
   document.head.appendChild(hostile);
+  return true;
+}));
 
+// Message streamed in later, so the observer has to catch it.
+say('late message', await page.evaluate(() => {
   const wrap = document.createElement('div');
   wrap.className = 'message-inner-ci';
   wrap.innerHTML = '<div class="qwen-markdown"><p>copyable reply text</p></div>';
   document.body.appendChild(wrap);
-
   const p = wrap.querySelector('p');
   const s = getComputedStyle(p);
   return {
     userSelect: s.userSelect,
     webkitUserSelect: s.webkitUserSelect,
+    inlineUserSelect: p.style.getPropertyValue('user-select'),
     wrapper: getComputedStyle(wrap).userSelect
   };
 }));
 
-// Real drag selection over the synthetic paragraph.
+// Drag selection over the synthetic paragraph.
 const target = page.getByText('copyable reply text').first();
 const box = await target.boundingBox();
 await page.mouse.move(box.x + 2, box.y + box.height / 2);
@@ -54,12 +59,32 @@ await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2, { steps: 10
 await page.mouse.up();
 say('drag selection', await page.evaluate(() => getSelection().toString()));
 
-// Unit-level check: a mousedown on message text must not reach a site handler that cancels it.
+// Framework reset: site writes user-select:none back onto the element.
+say('after site reset', await page.evaluate(async () => {
+  const p = document.querySelector('.qwen-markdown p');
+  p.style.setProperty('user-select', 'none', 'important');
+  await new Promise((r) => setTimeout(r, 50));
+  return getComputedStyle(p).userSelect;
+}));
+
+// Site handler must not receive the mousedown that starts a selection.
 say('site mousedown sees event', await page.evaluate(() => {
   let seen = 0;
   document.addEventListener('mousedown', () => { seen += 1; }, false);
-  const p = document.querySelector('.qwen-markdown p');
-  p.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+  document.querySelector('.qwen-markdown p').dispatchEvent(
+    new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 })
+  );
+  return seen;
+}));
+
+// Interactive children must still receive events (copy button, links).
+say('button mousedown passes through', await page.evaluate(() => {
+  const btn = document.createElement('button');
+  btn.textContent = 'copy';
+  document.querySelector('.qwen-markdown').appendChild(btn);
+  let seen = 0;
+  document.addEventListener('mousedown', () => { seen += 1; }, false);
+  btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
   return seen;
 }));
 

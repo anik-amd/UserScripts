@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Qwen Chat - Selectable Text
 // @namespace    https://github.com/anik-amd/UserScripts
-// @version      1.0.0
+// @version      1.1.0
 // @description  Restores text selection and copying of chat messages (AI replies and your own) in Qwen Chat, including in narrow windows where the site switches to its mobile layout.
 // @author       anik-amd
 // @homepageURL  https://github.com/anik-amd/UserScripts
@@ -18,7 +18,7 @@
 (function () {
   'use strict';
 
-  // Message bodies. Kept narrow on purpose: only text content is unlocked, never the shell.
+  // Message bodies. Deliberately narrow: only text content is unlocked, never the app shell.
   const CONTENT = [
     '.qwen-markdown',
     '.markdown-body',
@@ -29,7 +29,8 @@
     '.chat-message'
   ].join(',');
 
-  // 1. Undo `user-select: none` (and the -webkit- form, which some builds use alone).
+  // 1. Stylesheet pass. Covers the common case and applies before React even mounts.
+  //    (A site rule with equal specificity declared later would win, hence step 2.)
   function addStyle() {
     const style = document.createElement('style');
     style.id = 'us-qwen-selectable';
@@ -38,21 +39,83 @@
       '  -webkit-user-select: text !important;',
       '  user-select: text !important;',
       '  -webkit-touch-callout: default !important;',
-      '}',
-      `${CONTENT} ::selection { background: Highlight; color: HighlightText; }`
+      '}'
     ].join('\n');
     (document.head || document.documentElement).appendChild(style);
   }
 
-  if (document.readyState === 'loading' && !document.head) {
-    document.addEventListener('DOMContentLoaded', addStyle, { once: true });
-  } else {
+  if (document.head) {
     addStyle();
+  } else {
+    document.addEventListener('DOMContentLoaded', addStyle, { once: true });
   }
 
-  // 2. In its mobile layout Qwen treats the list like an app and cancels the pointer
-  //    events that start a drag selection. Swallow those events before its handlers run,
-  //    but only for plain text: links, buttons, inputs and code-copy controls stay clickable.
+  // 2. Inline pass. Inline `!important` beats every stylesheet rule, so the logged-in
+  //    chat UI cannot win by loading its `user-select: none` later or with higher specificity.
+  const PROPS = [
+    ['-webkit-user-select', 'text'],
+    ['user-select', 'text'],
+    ['-webkit-touch-callout', 'default']
+  ];
+
+  function alreadyUnlocked(el) {
+    return PROPS.every(
+      ([prop, value]) =>
+        el.style.getPropertyValue(prop) === value && el.style.getPropertyPriority(prop) === 'important'
+    );
+  }
+
+  function unlock(el) {
+    if (!(el instanceof Element) || alreadyUnlocked(el)) return;
+    for (const [prop, value] of PROPS) el.style.setProperty(prop, value, 'important');
+  }
+
+  function unlockTree(node) {
+    if (!(node instanceof Element)) return;
+
+    const scope = node.closest(CONTENT);
+    if (scope) {
+      unlock(scope);
+      for (const child of scope.querySelectorAll('*')) unlock(child);
+      return;
+    }
+
+    for (const match of node.querySelectorAll(CONTENT)) {
+      unlock(match);
+      for (const child of match.querySelectorAll('*')) unlock(child);
+    }
+  }
+
+  // Re-apply when the site re-renders a message (class/style churn) or streams new text in.
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      if (record.type === 'attributes') {
+        unlockTree(record.target);
+        continue;
+      }
+      for (const node of record.addedNodes) unlockTree(node);
+    }
+  });
+
+  function start() {
+    unlockTree(document.body);
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style']
+    });
+  }
+
+  if (document.body) {
+    start();
+  } else {
+    document.addEventListener('DOMContentLoaded', start, { once: true });
+  }
+
+  // 3. In the mobile layout Qwen cancels the pointer events that begin a drag selection.
+  //    Swallow them before its handlers run — but only for plain text, so links, buttons,
+  //    inputs and code-copy controls keep working.
   const INTERACTIVE = 'button, a[href], input, textarea, select, summary, [role="button"], [role="link"], [contenteditable="true"]';
 
   function inContent(target) {
@@ -69,7 +132,7 @@
   window.addEventListener('mousedown', swallow, true);
   window.addEventListener('pointerdown', swallow, true);
 
-  // 3. Some handlers call preventDefault() on selectstart; stop them from seeing it.
+  // 4. Some handlers call preventDefault() on selectstart; keep them from seeing it.
   window.addEventListener(
     'selectstart',
     (event) => {
