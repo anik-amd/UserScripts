@@ -1,11 +1,18 @@
-// Throwaway probe: isolate what stops a drag selection on .qwen-markdown.
+// Probe: selection, copy, and fallbacks for qwen-selectable-text.user.js.
+// Runs against a live chat.qwen.ai page with synthetic message elements, because the
+// guest page has no chat bubbles. Fails loudly in the report when an expectation regresses.
 import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 
 const OUT = 'probe-out';
 await fs.mkdir(OUT, { recursive: true });
 const report = [];
+const failures = [];
 const say = (k, v) => report.push(`## ${k}\n${typeof v === 'string' ? v : JSON.stringify(v, null, 1)}\n`);
+const check = (name, ok, detail) => {
+  report.push(`- ${ok ? 'PASS' : 'FAIL'} ${name}${detail === undefined ? '' : ` — ${JSON.stringify(detail)}`}\n`);
+  if (!ok) failures.push(name);
+};
 
 const SELECT_SCRIPT = await fs.readFile('scripts/qwen-selectable-text.user.js', 'utf8');
 const SEND_SCRIPT = await fs.readFile('scripts/qwen-enter-to-send.user.js', 'utf8');
@@ -17,15 +24,29 @@ process.on('unhandledRejection', async (e) => {
 });
 
 const browser = await chromium.launch();
-const ctx = await browser.newContext({ viewport: { width: 400, height: 860 }, locale: 'en-US' });
+const ctx = await browser.newContext({
+  viewport: { width: 400, height: 860 },
+  locale: 'en-US',
+  permissions: ['clipboard-read', 'clipboard-write']
+});
 const page = await ctx.newPage();
+const errors = [];
+page.on('pageerror', (e) => errors.push(e.message.slice(0, 160)));
+
 await page.addInitScript(SELECT_SCRIPT);
 await page.addInitScript(SEND_SCRIPT);
 await page.goto('https://chat.qwen.ai', { waitUntil: 'domcontentloaded', timeout: 60000 });
 await page.waitForTimeout(8000);
 await page.evaluate(() => document.querySelector('[class*="cookie-confirm"]')?.remove());
 
-await page.evaluate(() => {
+const MESSAGES = {
+  't-plain': 'plain selectable text',
+  't-class': 'class selectable text',
+  't-inline': 'inline selectable text',
+  't-msg': 'nested selectable text'
+};
+
+await page.evaluate((messages) => {
   const make = (id, top, className, inline, inner) => {
     const div = document.createElement('div');
     div.id = id;
@@ -35,133 +56,145 @@ await page.evaluate(() => {
     document.body.appendChild(div);
   };
 
-  make('t-plain', 120, '', '', 'plain selectable text');
-  make('t-class', 180, 'qwen-markdown', '', 'class selectable text');
-  make('t-inline', 240, '', 'user-select:text !important;-webkit-user-select:text !important', '<span>inline selectable text</span>');
+  make('t-plain', 120, '', '', messages['t-plain']);
+  make('t-class', 180, 'qwen-markdown', '', messages['t-class']);
+  make('t-inline', 240, '', 'user-select:text !important;-webkit-user-select:text !important', `<span>${messages['t-inline']}</span>`);
   make(
     't-msg',
     300,
     'qwen-markdown',
     '',
-    '<div class="qwen-markdown-paragraph"><span class="qwen-markdown-text"><span class="qwen-markdown-text-node">nested selectable text</span></span></div>'
+    `<div class="qwen-markdown-paragraph"><span class="qwen-markdown-text"><span class="qwen-markdown-text-node">${messages['t-msg']}</span></span></div>`
   );
-
-  window.__selEvents = [];
-  document.addEventListener(
-    'selectstart',
-    (e) => {
-      const seen = { prevented: e.defaultPrevented, target: String(e.target.className || e.target.id || e.target.tagName).slice(0, 40) };
-      setTimeout(() => {
-        seen.laterPrevented = e.defaultPrevented;
-        window.__selEvents.push(seen);
-      }, 0);
-    },
-    true
-  );
-});
+}, MESSAGES);
 
 async function drag(id) {
   const box = await page.locator('#' + id).boundingBox();
   await page.mouse.move(box.x + 2, box.y + box.height / 2);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2, { steps: 10 });
-  const mid = await page.evaluate(() => getSelection().toString());
   await page.mouse.up();
-  await page.waitForTimeout(100);
-  const after = await page.evaluate(() => getSelection().toString());
-  const computed = await page.evaluate((elId) => {
+  await page.waitForTimeout(250); // the fallback runs on a 0ms timer after mouseup
+  return page.evaluate(() => getSelection().toString().trim());
+}
+
+// ---- 1. drag selection on every markup variant ----
+for (const id of Object.keys(MESSAGES)) {
+  await page.evaluate(() => getSelection().removeAllRanges());
+  const selected = await drag(id);
+  say(`drag ${id}`, { selected, computed: await page.evaluate((elId) => {
     const node = document.querySelector('#' + elId);
     const s = getComputedStyle(node);
-    return {
-      userSelect: s.userSelect,
-      webkitUserSelect: s.webkitUserSelect,
-      pointerEvents: s.pointerEvents,
-      inline: node.getAttribute('style')
-    };
-  }, id);
-  return { mid, after, computed };
+    return { userSelect: s.userSelect, pointerEvents: s.pointerEvents };
+  }, id) });
+  check(`drag selects text in ${id}`, selected.includes(MESSAGES[id]), selected);
 }
 
-for (const id of ['t-plain', 't-class', 't-inline', 't-msg']) {
-  await page.evaluate(() => getSelection().removeAllRanges());
-  say(`drag ${id}`, await drag(id));
-}
-
-say('selectstart events', await page.evaluate(() => window.__selEvents));
-
-say('child computed', await page.evaluate(() => {
-  const node = document.querySelector('#t-msg .qwen-markdown-text-node');
-  const cs = getComputedStyle(node);
-  const rect = node.getBoundingClientRect();
-  const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
-  return {
-    pointerEvents: cs.pointerEvents,
-    userSelect: cs.userSelect,
-    webkitUserDrag: cs.webkitUserDrag,
-    display: cs.display,
-    contentVisibility: cs.contentVisibility,
-    touchAction: cs.touchAction,
-    hit: hit ? `${hit.tagName}.${String(hit.className).slice(0, 50)}` : null
-  };
-}));
-
-say('site rules touching qwen-markdown', await page.evaluate(() => {
-  const out = [];
-  const walk = (list, media) => {
-    for (const rule of list) {
-      if (rule.cssRules && rule.conditionText !== undefined) {
-        walk(rule.cssRules, rule.conditionText);
-        continue;
-      }
-      if (!rule.selectorText || !/qwen-markdown/.test(rule.selectorText)) continue;
-      const css = rule.style.cssText;
-      if (!/pointer-events|user-select|content-visibility|touch-action|overflow|position|z-index|display/.test(css)) continue;
-      out.push({ selector: rule.selectorText.slice(0, 140), media, css: css.slice(0, 220) });
-    }
-  };
-  for (const sheet of document.styleSheets) {
-    let rules;
-    try {
-      rules = sheet.cssRules;
-    } catch {
-      continue;
-    }
-    walk(rules, '');
-  }
-  return out.slice(0, 40);
-}));
-
-// does the site cancel a programmatically dispatched selectstart?
-say('dispatch selectstart', await page.evaluate(() => {
-  const node = document.querySelector('#t-msg .qwen-markdown-text-node');
-  const event = new Event('selectstart', { bubbles: true, cancelable: true });
-  node.dispatchEvent(event);
-  return { defaultPrevented: event.defaultPrevented };
-}));
-
-// Who clears the selection?
+// ---- 2. site-level drag sabotage must not matter ----
 await page.evaluate(() => {
-  window.__clears = [];
-  const original = Selection.prototype.removeAllRanges;
-  Selection.prototype.removeAllRanges = function () {
-    window.__clears.push((new Error().stack || '').split('\n').slice(1, 4).join(' | ').slice(0, 240));
-    return original.apply(this, arguments);
+  window.__blocked = 0;
+  const block = (e) => {
+    window.__blocked += 1;
+    e.preventDefault();
   };
+  window.addEventListener('mousedown', block, true);
+  window.addEventListener('pointerdown', block, true);
+  window.addEventListener('selectstart', block, true);
 });
 await page.evaluate(() => getSelection().removeAllRanges());
-await page.evaluate(() => {
-  window.__clears = [];
-});
-say('drag t-msg with spy', await drag('t-msg'));
-say('removeAllRanges calls', await page.evaluate(() => window.__clears.slice(0, 8)));
+const underBlock = await drag('t-msg');
+say('drag t-msg with site preventDefault', { selected: underBlock, blocked: await page.evaluate(() => window.__blocked) });
+check('drag selects text while the site cancels pointer events', underBlock.includes(MESSAGES['t-msg']), underBlock);
 
-// Block selectionchange before the site sees it, then retry.
+// ---- 3. transparent overlay above the message ----
 await page.evaluate(() => {
-  window.addEventListener('selectionchange', (e) => e.stopImmediatePropagation(), true);
+  const overlay = document.createElement('div');
+  overlay.id = 'probe-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:95000;background:transparent';
+  document.body.appendChild(overlay);
+  getSelection().removeAllRanges();
+});
+const underOverlay = await drag('t-msg');
+say('drag t-msg under overlay', underOverlay);
+check('drag selects text through an overlay', underOverlay.includes(MESSAGES['t-msg']), underOverlay);
+
+// double-click fallback works even when the overlay swallowed the event
+await page.evaluate(() => getSelection().removeAllRanges());
+const box = await page.locator('#t-msg').boundingBox();
+await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+await page.waitForTimeout(250);
+const dbl = await page.evaluate(() => getSelection().toString().trim());
+say('double-click selection', dbl);
+check('double-click selects the message', dbl.includes(MESSAGES['t-msg']), dbl);
+
+// Alt+C copies without any selection
+await page.evaluate(() => {
+  document.querySelector('#probe-overlay')?.remove();
+  getSelection().removeAllRanges();
+});
+await page.evaluate(() => navigator.clipboard.writeText('BEFORE-ALT-C'));
+await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+await page.keyboard.press('Alt+c');
+await page.waitForTimeout(400);
+const altC = await page.evaluate(() => navigator.clipboard.readText());
+say('alt+c clipboard', altC);
+check('Alt+C copies the message', altC.includes(MESSAGES['t-msg']), altC);
+
+// ---- 4. Ctrl+C must copy the selection even when the site hijacks it ----
+await page.evaluate(() => {
+  window.__siteSaw = { copy: 0, keydown: 0 };
+  document.addEventListener('copy', (e) => {
+    window.__siteSaw.copy += 1;
+    e.preventDefault();
+    navigator.clipboard.writeText('COPY-EVENT-HIJACK');
+  }, true);
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'c') {
+      window.__siteSaw.keydown += 1;
+      e.preventDefault();
+      navigator.clipboard.writeText('KEYDOWN-HIJACK');
+    }
+  }, true);
 });
 await page.evaluate(() => getSelection().removeAllRanges());
-say('drag t-msg with selectionchange blocked', await drag('t-msg'));
+await drag('t-msg');
+await page.evaluate(() => navigator.clipboard.writeText('BEFORE-CTRL-C'));
+await page.keyboard.press('Control+c');
+await page.waitForTimeout(500);
+const copied = await page.evaluate(() => navigator.clipboard.readText());
+say('ctrl+c clipboard', { copied, siteSaw: await page.evaluate(() => window.__siteSaw) });
+check('Ctrl+C copies the selection, not the site text', copied.includes(MESSAGES['t-msg']), copied);
+
+// ---- 5. regression: Enter still sends exactly one message ----
+await page.evaluate(() => location.reload());
+await page.waitForTimeout(8000);
+await page.evaluate(() => document.querySelector('[class*="cookie-confirm"]')?.remove());
+
+const ta = page.locator('textarea').first();
+await ta.click({ force: true });
+await ta.type('probe selectable', { delay: 10 });
+await page.evaluate(() => {
+  window.__clicks = [];
+  const native = HTMLElement.prototype.click;
+  HTMLElement.prototype.click = function () {
+    window.__clicks.push(`${this.tagName}.${String(this.className).trim()}`);
+    return native.apply(this, arguments);
+  };
+});
+await page.keyboard.press('Enter');
+await page.waitForTimeout(4000);
+const send = await page.evaluate(() => ({
+  clicks: window.__clicks || [],
+  value: document.querySelector('textarea')?.value ?? null
+}));
+say('send after fix', send);
+check('Enter triggers exactly one send button click', send.clicks.length === 1 && send.clicks[0].startsWith('BUTTON.send-button'), send.clicks);
+
+await page.screenshot({ path: `${OUT}/selectable-v15.png` });
+say('console errors', errors.slice(0, 10));
+say('summary', failures.length ? { failures } : 'all checks passed');
 
 await browser.close();
 await flush();
 console.log(report.join('\n'));
+if (failures.length) process.exitCode = 1;

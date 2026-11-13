@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Qwen Chat - Selectable Text
 // @namespace    https://github.com/anik-amd/UserScripts
-// @version      1.4.0
+// @version      1.5.0
 // @description  Restores text selection and copying of chat messages (AI replies and your own) in Qwen Chat, including in narrow windows where the site switches to its mobile layout.
 // @author       anik-amd
 // @homepageURL  https://github.com/anik-amd/UserScripts
@@ -166,7 +166,65 @@
     window.addEventListener(type, endDrag, true);
   }
 
-  // 4. Copy. Qwen rewrites the clipboard on copy (attribution / formatted markdown) in some
+  // 5. Some layouts never start a native selection at all (not CSS, not preventDefault:
+  //    the pointer drag simply produces a collapsed caret). Record the drag and, if the
+  //    browser ended up with nothing selected, build the range ourselves from the points.
+  function caretAt(x, y) {
+    if (document.caretRangeFromPoint) return document.caretRangeFromPoint(x, y);
+    if (!document.caretPositionFromPoint) return null;
+    const position = document.caretPositionFromPoint(x, y);
+    if (!position) return null;
+    const range = document.createRange();
+    range.setStart(position.offsetNode, position.offset);
+    range.collapse(true);
+    return range;
+  }
+
+  let drag = null;
+
+  function beginDrag(event) {
+    if (event.button !== 0) return;
+    const target = event.target;
+    if (!(target instanceof Element) || target.closest(INTERACTIVE)) return;
+    const scope = target.closest(CONTENT) || messageAtPoint(event.clientX, event.clientY);
+    if (!scope) return;
+    drag = { scope, x: event.clientX, y: event.clientY };
+  }
+
+  function finishDrag(event) {
+    if (!drag) return;
+    const start = drag;
+    drag = null;
+    if (Math.abs(event.clientX - start.x) < 3 && Math.abs(event.clientY - start.y) < 3) return; // a click
+
+    setTimeout(() => {
+      const selection = getSelection();
+      if (selection && !selection.isCollapsed && selection.toString().trim()) return; // native worked
+
+      const from = caretAt(start.x, start.y);
+      const to = caretAt(event.clientX, event.clientY);
+      if (!from || !to) return;
+      if (!start.scope.contains(from.startContainer) || !start.scope.contains(to.startContainer)) return;
+
+      const forward = from.compareBoundaryPoints(Range.START_TO_START, to) <= 0;
+      const range = document.createRange();
+      range.setStart(
+        forward ? from.startContainer : to.startContainer,
+        forward ? from.startOffset : to.startOffset
+      );
+      range.setEnd(
+        forward ? to.startContainer : from.startContainer,
+        forward ? to.startOffset : from.startOffset
+      );
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }, 0);
+  }
+
+  window.addEventListener('pointerdown', beginDrag, true);
+  window.addEventListener('mouseup', finishDrag, true);
+
+  // 6. Copy. Qwen rewrites the clipboard on copy (attribution / formatted markdown) in some
   //    builds, and at narrow widths that path can end up copying nothing. When the selection
   //    sits inside a message, let the browser copy natively instead.
   function selectionInContent() {
@@ -198,7 +256,7 @@
     true
   );
 
-  // 5. Escape hatches for layouts where no pointer drag starts a selection at all.
+  // 7. Escape hatches for layouts where no pointer drag starts a selection at all.
   function selectContents(el) {
     const range = document.createRange();
     range.selectNodeContents(el);
