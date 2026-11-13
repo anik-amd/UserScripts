@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Qwen Chat - Selectable Text
 // @namespace    https://github.com/anik-amd/UserScripts
-// @version      1.1.0
+// @version      1.3.0
 // @description  Restores text selection and copying of chat messages (AI replies and your own) in Qwen Chat, including in narrow windows where the site switches to its mobile layout.
 // @author       anik-amd
 // @homepageURL  https://github.com/anik-amd/UserScripts
@@ -113,20 +113,29 @@
     document.addEventListener('DOMContentLoaded', start, { once: true });
   }
 
-  // 3. In the mobile layout Qwen cancels the pointer events that begin a drag selection.
-  //    Swallow them before its handlers run — but only for plain text, so links, buttons,
-  //    inputs and code-copy controls keep working.
+  // 3. The mobile layout cancels the pointer events that begin a drag selection. Swallow them
+  //    before any site handler runs — including handlers on the same node (stopImmediate) and
+  //    handlers on a transparent overlay that sits above the text (hit-test the whole stack).
   const INTERACTIVE = 'button, a[href], input, textarea, select, summary, [role="button"], [role="link"], [contenteditable="true"]';
 
   function inContent(target) {
     return target instanceof Element && !!target.closest(CONTENT);
   }
 
+  function overContent(x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    const stack = document.elementsFromPoint(x, y);
+    // The overlay itself is not in CONTENT, but the text underneath it is.
+    return stack.some((el) => !!el.closest(CONTENT));
+  }
+
   function swallow(event) {
     if (event.button !== 0) return;
-    if (!inContent(event.target)) return;
-    if (event.target.closest(INTERACTIVE)) return;
-    event.stopPropagation();
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (!inContent(target) && !overContent(event.clientX, event.clientY)) return;
+    if (target.closest(INTERACTIVE)) return;
+    event.stopImmediatePropagation();
   }
 
   window.addEventListener('mousedown', swallow, true);
@@ -136,7 +145,7 @@
   window.addEventListener(
     'selectstart',
     (event) => {
-      if (inContent(event.target)) event.stopPropagation();
+      if (event.target instanceof Element && inContent(event.target)) event.stopImmediatePropagation();
     },
     true
   );
@@ -166,10 +175,66 @@
     'keydown',
     (event) => {
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-      const key = (event.key || '').toLowerCase();
-      if (key !== 'c') return;
+      if (String(event.key).toLowerCase() !== 'c') return;
       if (!selectionInContent()) return;
       event.stopImmediatePropagation();
+    },
+    true
+  );
+
+  // 6. Escape hatches for layouts where no pointer drag ever starts a selection.
+  function selectContents(el) {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  // Double-click a reply: select the whole message if the native word-select didn't happen.
+  window.addEventListener(
+    'dblclick',
+    (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest(INTERACTIVE)) return;
+      const scope = target.closest(CONTENT);
+      if (!scope) return;
+      setTimeout(() => {
+        if (!selectionInContent()) selectContents(scope);
+      }, 0);
+    },
+    true
+  );
+
+  // Alt+C copies the message under the pointer (or the last one), no selection needed.
+  let hovered = null;
+  document.addEventListener(
+    'mousemove',
+    (event) => {
+      hovered = event.target instanceof Element ? event.target : null;
+    },
+    true
+  );
+
+  window.addEventListener(
+    'keydown',
+    (event) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey) return;
+      if (String(event.key).toLowerCase() !== 'c') return;
+
+      const scope = (hovered && hovered.closest(CONTENT)) || document.querySelector(`${CONTENT}:last-of-type`);
+      if (!scope) return;
+
+      const text = (scope.innerText || scope.textContent || '').trim();
+      if (!text) return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      selectContents(scope);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).catch(() => {});
+      }
     },
     true
   );
