@@ -26,7 +26,7 @@ text, and paste it into the manager's "new script" editor:
 `https://raw.githubusercontent.com/anik-amd/UserScripts/main/scripts/<file>.user.js`
 
 Updates: each script declares `@updateURL` / `@downloadURL`, so managers pick up a new `@version`
-on their own. To force a reinstall, click the icon again.
+on their own. To force a reinstall, click **install** again.
 
 ## Layout
 
@@ -37,7 +37,7 @@ tests/                   # optional Playwright probes
 
 Every script carries a `@match`/`@include` header listing the site(s) it runs on. When adding a
 script, add a row to the table above (readable name linked to the file, site(s), behaviour, install
-icons) and keep the row and the header in sync.
+link) and keep the row and the header in sync.
 
 ## Verification
 
