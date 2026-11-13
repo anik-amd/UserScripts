@@ -1,7 +1,16 @@
-name: dom-probe
+name: probe
 
 on:
   workflow_dispatch:
+    inputs:
+      probe:
+        description: Which probe to run
+        required: true
+        default: dom
+        type: choice
+        options:
+          - dom
+          - copy
 
 jobs:
   probe:
@@ -22,13 +31,18 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Probe chat.qwen.ai
-        run: node tests/qwen-enter-to-send.probe.mjs
+      - name: Run probe
+        run: |
+          if [ "${{ inputs.probe }}" = "copy" ]; then
+            node tests/qwen-copy.probe.mjs
+          else
+            node tests/qwen-enter-to-send.probe.mjs
+          fi
         continue-on-error: true
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: probe-out
+          name: probe-${{ inputs.probe }}
           path: probe-out/
           if-no-files-found: warn
