@@ -139,6 +139,29 @@ say('dispatch selectstart', await page.evaluate(() => {
   return { defaultPrevented: event.defaultPrevented };
 }));
 
+// Who clears the selection?
+await page.evaluate(() => {
+  window.__clears = [];
+  const original = Selection.prototype.removeAllRanges;
+  Selection.prototype.removeAllRanges = function () {
+    window.__clears.push((new Error().stack || '').split('\n').slice(1, 4).join(' | ').slice(0, 240));
+    return original.apply(this, arguments);
+  };
+});
+await page.evaluate(() => getSelection().removeAllRanges());
+await page.evaluate(() => {
+  window.__clears = [];
+});
+say('drag t-msg with spy', await drag('t-msg'));
+say('removeAllRanges calls', await page.evaluate(() => window.__clears.slice(0, 8)));
+
+// Block selectionchange before the site sees it, then retry.
+await page.evaluate(() => {
+  window.addEventListener('selectionchange', (e) => e.stopImmediatePropagation(), true);
+});
+await page.evaluate(() => getSelection().removeAllRanges());
+say('drag t-msg with selectionchange blocked', await drag('t-msg'));
+
 await browser.close();
 await flush();
 console.log(report.join('\n'));
