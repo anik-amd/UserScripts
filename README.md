@@ -5,7 +5,6 @@ Personal collection of browser userscripts. Install with a userscript manager su
 
 Open a script's raw URL in the browser and the manager offers to install it:
 `https://raw.githubusercontent.com/anik-amd/UserScripts/main/scripts/<file>.user.js`
-(raw links only resolve once this repo is public, or with a token if it stays private).
 
 ## Scripts
 
@@ -38,4 +37,4 @@ composer and checks what Enter does. Run it with `gh workflow run dom-probe.yml 
 
 ## License
 
-MIT (to be added)
+[MIT](LICENSE) © 2026 Anik Ahmed
