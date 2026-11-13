@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Qwen Chat - Enter to Send
 // @namespace    https://github.com/anik-amd/UserScripts
-// @version      1.0.0
-// @description  Send a Qwen Chat message by pressing Enter. Shift+Enter still inserts a newline.
+// @version      2.0.0
+// @description  Press Enter to send in Qwen Chat when the site would otherwise insert a newline. Shift+Enter keeps the newline.
 // @author       anik-amd
 // @match        https://chat.qwen.ai/*
 // @match        https://chat.qwenlm.ai/*
@@ -13,10 +13,19 @@
 (function () {
   'use strict';
 
-  // Text that appears on / around a send button, across EN and ZH locales.
-  const SEND_HINT = /send|submit|发送|傳送|送出|paper[-_ ]?plane/i;
+  // Real send control (verified on chat.qwen.ai):
+  //   .message-input-right-button-send > .chat-prompt-send-button > button.send-button[aria-label="Send"]
+  // Only these are clicked — no "last button in the composer" guessing, so a
+  // mis-click can never open the mode picker, voice mode or an upload dialog.
+  const SEND_SELECTORS = [
+    '.message-input-right-button-send button.send-button',
+    '.message-input-right-button-send .chat-prompt-send-button button',
+    '.message-input-right-button-send [role="button"][aria-label*="send" i]',
+    'button.send-button[aria-label*="send" i]',
+    'form button[aria-label*="send" i]'
+  ];
 
-  // If one of these is open, Enter belongs to the popup (mention picker, menu...), not the send action.
+  // While one of these is open, Enter belongs to the popup (mention list, menus).
   const POPUP_SELECTOR = [
     '[role="listbox"]',
     '[role="menu"]',
@@ -25,104 +34,64 @@
     '.ant-dropdown:not(.ant-dropdown-hidden)'
   ].join(',');
 
-  let pendingClick = false;
+  let busy = false;
 
-  function isVisible(el) {
-    if (!el || !el.getBoundingClientRect) return false;
+  function isShown(el) {
+    if (!el) return false;
     if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
     const rect = el.getBoundingClientRect();
     if (rect.width < 2 || rect.height < 2) return false;
     const style = getComputedStyle(el);
-    return style.visibility !== 'hidden' && style.display !== 'none';
+    return style.visibility !== 'hidden' && style.display !== 'none' && style.pointerEvents !== 'none';
   }
 
-  function isEditable(el) {
-    if (!el) return false;
-    if (el.tagName === 'TEXTAREA') return true;
-    return el.isContentEditable === true;
+  function isEditor(el) {
+    return !!el && (el.tagName === 'TEXTAREA' || el.isContentEditable === true);
   }
 
-  function editorText(el) {
+  function textOf(el) {
     return el.tagName === 'TEXTAREA' ? el.value : (el.innerText || el.textContent || '');
   }
 
-  function hasOpenPopup() {
-    return Array.from(document.querySelectorAll(POPUP_SELECTOR)).some(isVisible);
-  }
-
-  function buttonLabel(el) {
-    const svg = el.querySelector('svg');
-    return [
-      el.getAttribute('aria-label'),
-      el.getAttribute('title'),
-      el.getAttribute('data-testid'),
-      el.getAttribute('name'),
-      typeof el.className === 'string' ? el.className : '',
-      svg && svg.getAttribute('class'),
-      svg && svg.getAttribute('data-icon'),
-      svg && svg.querySelector('title') && svg.querySelector('title').textContent
-    ]
-      .filter((value) => typeof value === 'string' && value)
-      .join(' ');
-  }
-
-  function sendButtonIn(scope) {
-    const buttons = Array.from(scope.querySelectorAll('button, [role="button"]'))
-      .filter((el) => isVisible(el) && el.closest('button, [role="button"]') === el)
-      .filter((el) => !el.querySelector('input[type="file"]'));
-
-    const hinted = buttons.find((el) => SEND_HINT.test(buttonLabel(el)));
-    if (hinted) return hinted;
-
-    // No recognizable label: the send control is normally the trailing button of the composer toolbar.
-    return buttons.length ? buttons[buttons.length - 1] : null;
+  function popupOpen() {
+    for (const el of document.querySelectorAll(POPUP_SELECTOR)) {
+      if (isShown(el)) return true;
+    }
+    return false;
   }
 
   function findSendButton(editor) {
-    // Walk up a few levels so the whole composer (textarea + toolbar) is in scope.
-    let node = editor;
-    for (let depth = 0; depth < 8 && node; depth += 1) {
-      const parent = node.parentElement;
-      if (!parent) break;
-      const found = sendButtonIn(parent);
-      if (found) return found;
-      node = parent;
+    const scope = editor.closest('.message-input-wrapper, form, .message-input-container') || document;
+    for (const selector of SEND_SELECTORS) {
+      for (const el of scope.querySelectorAll(selector)) {
+        if (isShown(el)) return el;
+      }
     }
-    // Last resort: look page-wide, but only accept an explicitly labelled send button.
-    const labelled = Array.from(document.querySelectorAll('button, [role="button"]'))
-      .filter((el) => isVisible(el) && SEND_HINT.test(buttonLabel(el)));
-    return labelled.length ? labelled[labelled.length - 1] : null;
+    return null;
   }
 
-  function submit(editor) {
-    if (pendingClick) return;
-    const button = findSendButton(editor);
-    if (!button) return;
+  function pressEnterToSend(event) {
+    if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229) return;
+    // Shift/Alt/Ctrl/Meta+Enter stay with the site (newline, shortcuts, IME alternatives).
+    if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (!isEditor(event.target)) return;
+    if (!textOf(event.target).trim()) return;
+    if (popupOpen()) return;
 
-    pendingClick = true;
-    // Let the editor flush its value to the framework before clicking.
+    const button = findSendButton(event.target);
+    if (!button) return; // never guess: if the control is missing, leave the site alone
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (busy) return;
+
+    busy = true;
+    // Let the editor flush its value before the click lands.
     requestAnimationFrame(() => {
-      pendingClick = false;
-      if (!button.disabled && button.getAttribute('aria-disabled') !== 'true') {
-        button.click();
-      }
+      busy = false;
+      if (isShown(button)) button.click();
     });
   }
 
-  function onKeyDown(event) {
-    if (event.key !== 'Enter') return;
-    if (event.isComposing || event.keyCode === 229) return; // IME is composing
-    if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return; // keep native newline / shortcuts
-    if (!isEditable(event.target)) return;
-    if (!editorText(event.target).trim()) return; // nothing to send
-    if (hasOpenPopup()) return; // Enter picks the highlighted suggestion
-
-    event.preventDefault();
-    // Capture-phase listener on window: stopping here keeps the site's own Enter handler
-    // from also submitting, so the click below is the single send path.
-    event.stopPropagation();
-    submit(event.target);
-  }
-
-  window.addEventListener('keydown', onKeyDown, true);
+  window.addEventListener('keydown', pressEnterToSend, true);
 })();

@@ -1,55 +1,61 @@
-// Throwaway probe v3: what does native Enter do, vs Shift+Enter, vs clicking the send div?
+// Throwaway probe v4: verify the userscript clicks the real send button and nothing else.
 import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 
 const OUT = 'probe-out';
 await fs.mkdir(OUT, { recursive: true });
 const report = [];
-const say = (key, value) => report.push(`## ${key}\n${value}\n`);
+const say = (k, v) => report.push(`## ${k}\n${typeof v === 'string' ? v : JSON.stringify(v, null, 1)}\n`);
 
-const STATE = () => {
-  const ta = document.querySelector('textarea');
-  const send = document.querySelector('.message-input-right-button-send, .message-input-right-button-send *');
-  return {
-    value: ta ? ta.value : null,
-    newline: ta ? ta.value.includes('\n') : null,
-    loginWall: /Welcome to Qwen/i.test(document.body.innerText || ''),
-    sendRegion: document.querySelector('.message-input-right-button-send')?.outerHTML.slice(0, 700) || null,
-    icon: send ? `${send.tagName}.${typeof send.className === 'string' ? send.className : ''}` : null
-  };
-};
+const US = await fs.readFile('scripts/qwen-enter-to-send.user.js', 'utf8');
 
-async function scenario(label, act) {
+async function scenario(label, inject, keys, patchClick) {
   const browser = await chromium.launch();
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'en-US' });
   const page = await ctx.newPage();
-  const net = [];
-  page.on('request', (r) => {
-    if (r.method() === 'POST') net.push(`${r.method()} ${r.url().slice(0, 120)}`);
-  });
+
+  if (inject) await page.addInitScript(US);
 
   await page.goto('https://chat.qwen.ai', { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForTimeout(7000);
 
+  if (patchClick) {
+    await page.evaluate(() => {
+      window.__clicks = [];
+      const native = HTMLElement.prototype.click;
+      HTMLElement.prototype.click = function () {
+        window.__clicks.push(`${this.tagName}.${typeof this.className === 'string' ? this.className : ''}`);
+        return native.apply(this, arguments);
+      };
+    });
+  }
+
   const ta = page.locator('textarea').first();
   await ta.click();
   await ta.type('probe ' + label, { delay: 15 });
-  const typed = await page.evaluate(STATE);
-  say(`${label}: state typed`, JSON.stringify({ ...typed, value: undefined }, null, 1));
 
-  await act(page);
+  const state = () =>
+    page.evaluate(() => ({
+      value: document.querySelector('textarea')?.value,
+      newline: (document.querySelector('textarea')?.value || '').includes('\n'),
+      loginWall: /Welcome to Qwen/i.test(document.body.innerText || ''),
+      clicks: window.__clicks || []
+    }));
+
+  say(`${label}: before`, await state());
+  for (const key of keys) await page.keyboard.press(key);
   await page.waitForTimeout(4000);
-  const after = await page.evaluate(STATE);
-  say(`${label}: state after`, JSON.stringify(after, null, 1));
-  say(`${label}: POSTs`, net.length ? net.join('\n') : 'none');
+  say(`${label}: after`, await state());
   await page.screenshot({ path: `${OUT}/${label}.png` });
   await browser.close();
 }
 
-await scenario('a-control-no-key', async () => {});
-await scenario('b-plain-enter', (p) => p.keyboard.press('Enter'));
-await scenario('c-shift-enter', (p) => p.keyboard.press('Shift+Enter'));
-await scenario('d-click-send-div', (p) => p.locator('.message-input-right-button-send').click({ force: true }));
+// Native reference: guest mode Enter already sends (login wall = send attempt).
+await scenario('ref-native-enter', false, ['Enter'], false);
+// Userscript must reproduce that exactly, and click only the send button.
+await scenario('us-plain-enter', true, ['Enter'], true);
+// Userscript must leave Shift+Enter alone.
+await scenario('us-shift-enter', true, ['Shift+Enter'], true);
 
 await fs.writeFile(`${OUT}/report.md`, report.join('\n'), 'utf8');
 console.log(report.join('\n'));
